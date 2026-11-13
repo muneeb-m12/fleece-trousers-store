@@ -70,6 +70,18 @@ and the Instagram strip (`src/components/ShopTheLook.tsx`, data in
   blurred and faded (depth of field), pulsing pin on each outfit, idle
   float + mouse parallax, prev/next arrows and a segmented progress bar
   with look names (01 Street Layers … 06 Off Duty).
+- Motion (Nike video): the lineup is a slow auto-drift carousel — the
+  row glides to the next look every 3.5s (900ms glide on the spring ease
+  above), the centred model sharpens/scales up, the outgoing centre
+  blurs/fades, and a new model enters from the right edge; it loops
+  seamlessly (the row is 18 slots — three copies of the 6 looks — and
+  resets by exactly one look cycle, which is invisible). Drift pauses
+  while hovering/touching the stage, in detail view, and for ~6s after
+  any manual change. Mouse parallax is depth-graded and clearly visible
+  (centre model ±18px, next ±10px, outer ±5px, plus a tiny vertical
+  shift, rAF + lerp). The segment bar, look name, and "In this look"
+  panel follow whichever model is centred (panel crossfades ~300ms).
+  The same motion lives in the standalone `public/shop-the-look.html`.
 - Click/tap a model: the others fade and blur away while the chosen one
   scales ~1.6x and glides to the centre (spring ease
   `cubic-bezier(0.22, 1, 0.36, 1)`); the heading crossfades into the

@@ -231,7 +231,13 @@ body {
 .stl-track {
   position: relative;
   height: 100%;
-  width: 100%;
+  /* 300% = 18 slots (three copies of the 6 looks) at 1/6 of the stage
+     each. The auto-drift carousel slides a 6-look window over this
+     repeating row and resets by exactly one look cycle (±6 slots) when
+     it reaches the end — the reset shows the same looks at the same
+     screen positions, so the loop is seamless. */
+  width: 300%;
+  /* No CSS transition here: the rAF motion loop drives this transform. */
   will-change: transform;
 }
 
@@ -241,10 +247,14 @@ body {
 .stl-model {
   position: absolute;
   bottom: 0;
-  left: calc((var(--i) + 0.5) * 100% / 6);
+  /* Slot centre: evenly spaced across the 18-slot repeating row. */
+  left: calc((var(--i) + 0.5) * 100% / 18);
   height: 500px;
   aspect-ratio: 1 / 2;
+  /* --dx: px glide-to-centre offset, set when entering detail.
+     --mx/--my: mouse-parallax offsets, set by the rAF motion loop. */
   transform: translateX(-50%) translateX(var(--dx, 0px))
+    translateX(var(--mx, 0px)) translateY(var(--my, 0px))
     scale(calc(var(--s, 1) * var(--hs, 1)));
   opacity: var(--o, 1);
   filter: blur(var(--b, 0px)) brightness(var(--dim, 1));
@@ -259,6 +269,10 @@ body {
   padding: 0;
   will-change: transform, opacity, filter;
 }
+/* While the rAF motion loop (drift glide / mouse parallax) is running,
+   the loop writes the model transforms directly every frame — CSS
+   transitions would lag and fight it, so they are switched off. */
+.stl-live .stl-model { transition: none !important; }
 .stl-model-rise { height: 100%; opacity: 0; }
 .stl.in-view .stl-model-rise {
   animation: stl-rise 0.85s var(--stl-spring) both;
@@ -441,6 +455,12 @@ body {
   letter-spacing: -0.03em;
 }
 .stl-panel-items { margin-top: 16px; display: grid; gap: 12px; }
+/* The panel content crossfades (~300ms) whenever the centred look
+   changes — drift step, prev/next, swipe, or dot. In React the panel
+   items remount on every active-look change (key), so this animation
+   replays each time. */
+@keyframes stl-panel-fade { from { opacity: 0; } to { opacity: 1; } }
+.stl-panel-items { animation: stl-panel-fade 0.3s ease; }
 .stl.is-detail .stl-panel { animation: stl-panel-in 0.55s var(--stl-spring) both; }
 @keyframes stl-panel-in {
   from { opacity: 0; transform: translateX(28px); }
@@ -548,15 +568,11 @@ body {
   .stl-head { min-height: 96px; }
   .stl-stage { height: 460px; }
   .stl.is-detail .stl-stage { height: 680px; }
-  .stl-scroll {
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-  }
-  .stl-scroll::-webkit-scrollbar { display: none; }
+  /* The lineup is still the auto-drift carousel on small screens —
+     drift + swipe carry the motion; there is no native scroll row. */
+  .stl-scroll { overflow: hidden; }
   .stl.is-detail .stl-scroll { overflow: hidden; }
-  .stl-track { width: calc(6 * 58vw + 24px); min-width: 100%; }
+  .stl-track { width: calc(18 * 58vw + 24px); min-width: 100%; }
   .stl-model { height: 400px; }
   .stl-segment-label { display: none; }
   .stl-segment.is-active .stl-segment-label { display: block; }
@@ -568,7 +584,8 @@ body {
   .stl-pin::after,
   .stl.is-detail .stl-panel,
   .stl.is-detail .stl-panel-item,
-  .stl.is-detail .stl-pin-detail {
+  .stl.is-detail .stl-pin-detail,
+  .stl-panel-items {
     animation: none !important;
   }
   .stl-model,

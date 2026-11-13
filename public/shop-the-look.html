@@ -226,8 +226,13 @@ img { display: block; }
 .stl-track {
   position: relative;
   height: 100%;
-  width: 100%;
-  /* Mouse-move parallax is applied here (transform only, rAF). */
+  /* 300% = 18 slots (three copies of the 6 looks) at 1/6 of the stage
+     each. The auto-drift carousel slides a 6-look window over this
+     repeating row and resets by exactly one look cycle (±6 slots) when
+     it reaches the end — the reset shows the same looks at the same
+     screen positions, so the loop is seamless. */
+  width: 300%;
+  /* No CSS transition here: the rAF motion loop drives this transform. */
   will-change: transform;
 }
 
@@ -242,13 +247,15 @@ img { display: block; }
 .stl-model {
   position: absolute;
   bottom: 0;
-  /* Slot centre: evenly spaced across the track. */
-  left: calc((var(--i) + 0.5) * 100% / 6);
+  /* Slot centre: evenly spaced across the 18-slot repeating row. */
+  left: calc((var(--i) + 0.5) * 100% / 18);
   height: 500px;
   aspect-ratio: 1 / 2;
   /* --s: depth/detail scale. --hs: 0.95 when fading away in detail.
-     --dx: px glide-to-centre offset, set from JS when entering detail. */
+     --dx: px glide-to-centre offset, set from JS when entering detail.
+     --mx/--my: mouse-parallax offsets, set by the rAF motion loop. */
   transform: translateX(-50%) translateX(var(--dx, 0px))
+    translateX(var(--mx, 0px)) translateY(var(--my, 0px))
     scale(calc(var(--s, 1) * var(--hs, 1)));
   opacity: var(--o, 1);
   filter: blur(var(--b, 0px)) brightness(var(--dim, 1));
@@ -263,6 +270,10 @@ img { display: block; }
   padding: 0;
   will-change: transform, opacity, filter;
 }
+/* While the rAF motion loop (drift glide / mouse parallax) is running,
+   the loop writes the model transforms directly every frame — CSS
+   transitions would lag and fight it, so they are switched off. */
+.stl-live .stl-model { transition: none !important; }
 .stl-model-rise { height: 100%; opacity: 0; }
 .stl.in-view .stl-model-rise {
   /* Rise up from the floor, staggered per model (set in JS). */
@@ -472,6 +483,11 @@ img { display: block; }
   from { opacity: 0; transform: translateX(28px); }
   to   { opacity: 1; transform: translateX(0); }
 }
+/* The panel content crossfades (~300ms) whenever the centred look
+   changes — drift step, prev/next, swipe, or dot. JS re-triggers this
+   animation (removing then re-adding .stl-fade) on every panel render. */
+@keyframes stl-panel-fade { from { opacity: 0; } to { opacity: 1; } }
+.stl-panel-items.stl-fade { animation: stl-panel-fade 0.3s ease; }
 .stl.is-detail .stl-panel-item {
   animation: stl-item-in 0.5s var(--spring) both;
   animation-delay: var(--item-delay, 0ms);
@@ -579,16 +595,11 @@ img { display: block; }
   .stl-head { min-height: 96px; }
   .stl-stage { height: 460px; }
   .stl.is-detail .stl-stage { height: 680px; }
-  /* Lineup becomes a horizontally scrollable / swipeable row. */
-  .stl-scroll {
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-  }
-  .stl-scroll::-webkit-scrollbar { display: none; }
+  /* The lineup is still the auto-drift carousel on small screens —
+     drift + swipe carry the motion; there is no native scroll row. */
+  .stl-scroll { overflow: hidden; }
   .stl.is-detail .stl-scroll { overflow: hidden; }
-  .stl-track { width: calc(6 * 58vw + 24px); min-width: 100%; }
+  .stl-track { width: calc(18 * 58vw + 24px); min-width: 100%; }
   .stl-model { height: 400px; }
   /* Only the active look's name shows on small screens. */
   .stl-segment-label { display: none; }
@@ -604,7 +615,8 @@ img { display: block; }
   .stl-pin::after,
   .stl.is-detail .stl-panel,
   .stl.is-detail .stl-panel-item,
-  .stl.is-detail .stl-pin-detail {
+  .stl.is-detail .stl-pin-detail,
+  .stl-panel-items.stl-fade {
     animation: none !important;
   }
   .stl-model,
@@ -770,6 +782,57 @@ const LOOKS = [
 
 const fmt = (n) => "Rs " + n.toLocaleString("en-PK");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const finePointer = window.matchMedia("(pointer: fine)").matches;
+
+/* ================================================================== */
+/*  MOTION — auto-drift carousel + visible mouse parallax (Nike       */
+/*  video). The row glides to the next look every 3.5s (the video      */
+/*  drifts ~1.2s per look, but that is demo speed — 3.5s is the        */
+/*  usable store pace). Each step is a smooth ~900ms glide on the      */
+/*  spring ease; the centred model sharpens/scales up, the outgoing    */
+/*  centre blurs/fades, and a new model enters from the right edge.    */
+/*  The row also follows the pointer with depth-graded parallax.       */
+/*  All motion is transform/opacity-only (60fps).                      */
+/* ================================================================== */
+const SLOT_COUNT = 18;      // three copies of the 6 looks (slots 0..17)
+const LOOK_COUNT = 6;
+const CENTRE_MIN = 3;       // centre-slot range with a full window
+const CENTRE_MAX = 14;
+const INITIAL_CENTRE = 6;   // look 01 centred at rest
+const DRIFT_MS = 3500;      // auto-drift interval
+const GLIDE_MS = 900;       // one drift step / manual glide
+const RESUME_MS = 6000;     // pause after a manual change
+const lookOf = (slot) => ((slot % LOOK_COUNT) + LOOK_COUNT) % LOOK_COUNT;
+
+// Cubic-bezier easing solver (same curve as CSS cubic-bezier()).
+function cubicBezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const sampleX = (t) => ((ax * t + bx) * t + cx) * t;
+  const sampleY = (t) => ((ay * t + by) * t + cy) * t;
+  const sampleDX = (t) => (3 * ax * t + 2 * bx) * t + cx;
+  function solveX(x) {
+    let t = x;
+    for (let i = 0; i < 8; i++) {
+      const err = sampleX(t) - x;
+      if (Math.abs(err) < 1e-6) return t;
+      const d = sampleDX(t);
+      if (Math.abs(d) < 1e-6) break;
+      t -= err / d;
+    }
+    let lo = 0, hi = 1;
+    t = x;
+    while (lo < hi) {
+      const err = sampleX(t) - x;
+      if (Math.abs(err) < 1e-6) return t;
+      if (err > 0) hi = t; else lo = t;
+      t = (lo + hi) / 2;
+    }
+    return t;
+  }
+  return (x) => (x <= 0 ? 0 : x >= 1 ? 1 : sampleY(solveX(x)));
+}
+const SPRING = cubicBezier(0.22, 1, 0.36, 1);
 
 /* ================================================================== */
 /*  State + element refs                                               */
@@ -787,14 +850,27 @@ const addAllTotal = document.getElementById("addAllTotal");
 const backBtn = document.getElementById("backBtn");
 const segmentsEl = document.getElementById("segments");
 
-let active = 0;                 // selected look (lineup focus + panel)
+let active = 0;                 // look shown in the panel (0..5)
 let mode = "lineup";            // "lineup" | "detail"
-let detailTarget = null;        // look index shown in detail view
-let modelEls = [];              // one <button> per look, in LOOKS order
+let detailTarget = null;        // ELEMENT slot (0..17) shown in detail view
+let centreSlot = INITIAL_CENTRE; // int at rest, fractional mid-glide
+let modelEls = [];              // one <div> per slot, in slot order
 
-/* Depth of field in the lineup: distance from the row centre (2.5). */
-function depthFor(i) {
-  const d = Math.abs(i - (LOOKS.length - 1) / 2);
+// Motion state. The rAF loop is the only writer of the track transform
+// and the per-model parallax vars (--mx/--my) while it runs.
+let driftTx = 0, parallaxTx = 0;
+let pointerNX = 0, pointerNY = 0, pointerOver = false;
+let parallaxX = new Array(SLOT_COUNT).fill(0);
+let parallaxY = new Array(SLOT_COUNT).fill(0);
+let gliding = null;             // {fromCentre,toCentre,fromTx,toTx,start,onDone}
+let motionRaf = null;
+let hovering = false, touching = false, inView = false;
+let lastManual = 0, lastStep = performance.now();
+
+/* Depth of field: distance from the (moving) centre slot. Same curve
+   as the original static version — only the centre moves now. */
+function depthForSlot(slot, centre) {
+  const d = Math.abs(slot - centre);
   return {
     s: Math.max(0.86, 1 - 0.055 * d),
     b: (d * 1.2).toFixed(1) + "px",
@@ -802,12 +878,193 @@ function depthFor(i) {
     z: 10 - Math.round(d),
   };
 }
+/* Parallax range by depth: the sharp centre model moves most, the
+   next ones less, the blurred outer ones least. */
+function parallaxRange(d) {
+  if (d < 0.75) return { x: 18, y: 6 };
+  if (d < 1.75) return { x: 10, y: 4 };
+  return { x: 5, y: 2 };
+}
+
+/* ---- track ---- */
+function writeTrack() {
+  track.style.transform = "translate3d(" + (driftTx + parallaxTx).toFixed(1) + "px, 0, 0)";
+}
+/* Drift translate that centres slot c. It is computed from the current
+   total track transform, so the parallax offset is preserved. */
+function txForSlot(c) {
+  const el = modelEls[c];
+  const stageRect = scrollEl.getBoundingClientRect();
+  const trackRect = track.getBoundingClientRect();
+  const slotCentre = trackRect.left + el.offsetLeft + el.offsetWidth / 2;
+  const visibleCentre = stageRect.left + stageRect.width / 2;
+  return driftTx + (visibleCentre - slotCentre);
+}
+/* Depth vars for every model from a (possibly fractional) centre. */
+function applyLineupDepth(centre) {
+  modelEls.forEach((el, k) => {
+    const depth = depthForSlot(k, centre);
+    el.style.setProperty("--s", String(depth.s));
+    el.style.setProperty("--o", String(depth.o));
+    el.style.setProperty("--b", depth.b);
+    el.style.setProperty("--z", String(depth.z));
+  });
+}
+/* Instant, invisible centre reset: shifting the centre by exactly one
+   look cycle (6 slots) shows the same looks at the same screen
+   positions, so the row never has to sweep back across the whole rail. */
+function resetCentre(delta) {
+  centreSlot += delta;
+  driftTx = txForSlot(centreSlot);
+  writeTrack();
+  applyLineupDepth(centreSlot);
+}
+/* Bring a glide target into the [CENTRE_MIN, CENTRE_MAX] window,
+   resetting the centre first when needed (invisible, see above). */
+function normalizeTarget(target) {
+  while (target > CENTRE_MAX) { resetCentre(-LOOK_COUNT); target -= LOOK_COUNT; }
+  while (target < CENTRE_MIN) { resetCentre(LOOK_COUNT); target += LOOK_COUNT; }
+  return target;
+}
+
+/* ---- the single rAF motion loop: drift glide + mouse parallax ---- */
+function ensureMotionLoop() {
+  if (motionRaf !== null || reducedMotion) return;
+  section.classList.add("stl-live");
+  const tick = (now) => {
+    motionRaf = null;
+    let busy = false;
+    if (gliding) {
+      const g = gliding;
+      const p = Math.min(1, (now - g.start) / GLIDE_MS);
+      const e = SPRING(p);
+      const effCentre = g.fromCentre + (g.toCentre - g.fromCentre) * e;
+      driftTx = g.fromTx + (g.toTx - g.fromTx) * e;
+      centreSlot = effCentre;
+      applyLineupDepth(effCentre);
+      if (p >= 1) {
+        centreSlot = g.toCentre;
+        driftTx = txForSlot(centreSlot);
+        applyLineupDepth(centreSlot);
+        const done = g.onDone;
+        gliding = null;
+        updateActiveLook(lookOf(centreSlot));
+        if (done) done();
+      } else busy = true;
+    }
+    if (mode === "lineup" && finePointer) {
+      const lerp = (cur, tgt) => cur + (tgt - cur) * 0.12;
+      parallaxTx = lerp(parallaxTx, pointerOver ? pointerNX * 20 : 0);
+      let settled = Math.abs(parallaxTx) < 0.1;
+      modelEls.forEach((el, k) => {
+        const d = Math.abs(k - centreSlot);
+        const r = parallaxRange(d);
+        const tx = pointerOver ? r.x * pointerNX * 2 : 0;
+        const ty = pointerOver ? r.y * pointerNY * 2 : 0;
+        parallaxX[k] = lerp(parallaxX[k], tx);
+        parallaxY[k] = lerp(parallaxY[k], ty);
+        el.style.setProperty("--mx", parallaxX[k].toFixed(1) + "px");
+        el.style.setProperty("--my", parallaxY[k].toFixed(1) + "px");
+        if (Math.abs(parallaxX[k]) > 0.1 || Math.abs(parallaxY[k]) > 0.1) settled = false;
+      });
+      if (!settled) busy = true;
+    }
+    writeTrack();
+    if (busy) motionRaf = requestAnimationFrame(tick);
+    else section.classList.remove("stl-live");
+  };
+  motionRaf = requestAnimationFrame(tick);
+}
+function stopMotionLoop() {
+  if (motionRaf !== null) {
+    cancelAnimationFrame(motionRaf);
+    motionRaf = null;
+  }
+  section.classList.remove("stl-live");
+}
+
+/* ---- glide ---- */
+function glideTo(targetCentre, onDone) {
+  if (gliding) return;
+  const target = normalizeTarget(targetCentre);
+  if (target === Math.round(centreSlot)) {
+    if (onDone) onDone();
+    return;
+  }
+  if (reducedMotion) {
+    centreSlot = target;
+    driftTx = txForSlot(centreSlot);
+    writeTrack();
+    applyLineupDepth(centreSlot);
+    updateActiveLook(lookOf(centreSlot));
+    if (onDone) onDone();
+    return;
+  }
+  gliding = {
+    fromCentre: centreSlot, toCentre: target,
+    fromTx: driftTx, toTx: txForSlot(target),
+    start: performance.now(), onDone: onDone || null,
+  };
+  ensureMotionLoop();
+}
+function finishGlideNow() {
+  if (!gliding) return;
+  const g = gliding;
+  gliding = null;
+  centreSlot = g.toCentre;
+  driftTx = txForSlot(centreSlot);
+  writeTrack();
+  applyLineupDepth(centreSlot);
+  updateActiveLook(lookOf(centreSlot));
+  if (g.onDone) g.onDone();
+}
+function step(dir) {
+  if (mode !== "lineup" || gliding) return;
+  lastStep = performance.now();
+  glideTo(centreSlot + dir);
+}
+function noteManual() {
+  lastManual = performance.now();
+  lastStep = performance.now();
+}
+function goToLook(look) {
+  const target = ((look % LOOK_COUNT) + LOOK_COUNT) % LOOK_COUNT;
+  // Nearest slot showing this look (representatives are 6 apart).
+  let best = null, bestD = Infinity;
+  for (let s = 0; s < SLOT_COUNT; s++) {
+    if (lookOf(s) !== target) continue;
+    const d = Math.abs(s - centreSlot);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  glideTo(best);
+}
+function resetParallaxNow() {
+  parallaxTx = 0;
+  parallaxX.fill(0);
+  parallaxY.fill(0);
+  writeTrack();
+  modelEls.forEach((el) => {
+    el.style.setProperty("--mx", "0px");
+    el.style.setProperty("--my", "0px");
+  });
+}
+function nearestSlotForLook(look, fromSlot) {
+  let best = null, bestD = Infinity;
+  for (let s = 0; s < SLOT_COUNT; s++) {
+    if (lookOf(s) !== look) continue;
+    const d = Math.abs(s - fromSlot);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  return best;
+}
 
 /* ================================================================== */
 /*  Build the models + controls once from the LOOKS array              */
 /* ================================================================== */
-LOOKS.forEach((look, i) => {
-  const depth = depthFor(i);
+// 18 slots: three copies of the 6 looks, so the drift carousel can
+// glide forever — the visible window is always a full 6-look row.
+for (let k = 0; k < SLOT_COUNT; k++) {
+  const look = LOOKS[k % LOOK_COUNT];
 
   // The model is a <div role="button">, NOT a <button>: the pins inside
   // it are real <button>s, and buttons cannot legally nest in HTML
@@ -816,11 +1073,12 @@ LOOKS.forEach((look, i) => {
   btn.className = "stl-model";
   btn.setAttribute("role", "button");
   btn.tabIndex = 0;
-  btn.style.setProperty("--i", i);
-  btn.style.setProperty("--rise-delay", i * 90 + "ms");
-  btn.style.setProperty("--float-delay", i * 0.45 + "s");
+  btn.style.setProperty("--i", k);
+  // Stagger by look, not slot, so the visible row rises 0..450ms.
+  btn.style.setProperty("--rise-delay", (k % LOOK_COUNT) * 90 + "ms");
+  btn.style.setProperty("--float-delay", (k % LOOK_COUNT) * 0.45 + "s");
   btn.setAttribute("aria-label", "View look " + look.num + ", " + look.name);
-  btn.dataset.index = i;
+  btn.dataset.index = k;
 
   // One pulsing pin in the lineup + three product pins in detail view.
   const pinsHtml =
@@ -840,7 +1098,7 @@ LOOKS.forEach((look, i) => {
     '<span class="stl-shadow"></span>' +
     '<span class="stl-model-hover">' +
     '<img class="stl-model-img" src="' + look.model + '" alt="' + look.alt + '" loading="' +
-    (i === 0 ? "eager" : "lazy") + '" draggable="false">' +
+    (k >= CENTRE_MIN && k <= 9 ? "eager" : "lazy") + '" draggable="false">' +
     pinsHtml +
     "</span></span></span>";
 
@@ -852,15 +1110,15 @@ LOOKS.forEach((look, i) => {
       highlightProduct(pin.dataset.pin === undefined ? 0 : Number(pin.dataset.pin));
       return;
     }
-    if (mode === "detail" && detailTarget === i) return;
-    enterDetail(i);
+    if (mode === "detail" && detailTarget === k) return;
+    enterDetail(k);
   });
   // Keyboard: Enter / Space on a focused model opens its detail view.
   btn.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      if (mode === "detail" && detailTarget === i) return;
-      enterDetail(i);
+      if (mode === "detail" && detailTarget === k) return;
+      enterDetail(k);
     }
   });
   btn.addEventListener("mouseenter", () => {
@@ -876,8 +1134,10 @@ LOOKS.forEach((look, i) => {
 
   track.appendChild(btn);
   modelEls.push(btn);
+}
 
-  // Segmented progress bar: one segment per look.
+// Segmented progress bar: one segment per look.
+LOOKS.forEach((look, i) => {
   const seg = document.createElement("button");
   seg.type = "button";
   seg.className = "stl-segment";
@@ -923,6 +1183,11 @@ function renderPanel() {
         '<span class="stl-panel-item-price">' + fmt(p.price) + "</span></a>",
     )
     .join("");
+  // Crossfade the panel content (~300ms) whenever the centred look
+  // changes (drift step, prev/next, swipe, dot).
+  panelItems.classList.remove("stl-fade");
+  void panelItems.offsetWidth;
+  panelItems.classList.add("stl-fade");
   // Re-trigger the stagger animation when the panel re-renders in detail.
   if (mode === "detail") {
     panel.classList.remove("is-detail");
@@ -947,9 +1212,9 @@ function highlightProduct(pi) {
 /*  Lineup <-> detail transitions                                      */
 /* ================================================================== */
 
-/* Measure the px glide that puts model i at the centre of the stage. */
-function centreModel(i) {
-  const el = modelEls[i];
+/* Measure the px glide that puts model slot k at the centre of the stage. */
+function centreModel(k) {
+  const el = modelEls[k];
   const stageRect = scrollEl.getBoundingClientRect();
   // offsetLeft/offsetWidth are untransformed slot geometry (the model's
   // offsetParent is the relatively-positioned track), so the glide
@@ -961,14 +1226,28 @@ function centreModel(i) {
   el.style.setProperty("--dx", Math.round(visibleCentre - modelCentre) + "px");
 }
 
+function updateSegments() {
+  document.querySelectorAll(".stl-segment").forEach((seg, i) => {
+    seg.classList.toggle("is-active", i === active);
+    seg.setAttribute("aria-selected", i === active ? "true" : "false");
+  });
+}
+/* The centred look changed (a drift step or manual glide finished):
+   segment bar, look name, and panel all follow it. */
+function updateActiveLook(look) {
+  active = look;
+  updateSegments();
+  renderPanel();
+}
+
 function applyModelStates() {
-  modelEls.forEach((el, i) => {
-    const depth = depthFor(i);
+  modelEls.forEach((el, k) => {
+    const depth = depthForSlot(k, centreSlot);
     // Hidden models must not stay clickable in detail view.
-    el.classList.toggle("is-detail-target", mode === "detail" && i === detailTarget);
-    el.classList.toggle("is-hidden-model", mode === "detail" && i !== detailTarget);
+    el.classList.toggle("is-detail-target", mode === "detail" && k === detailTarget);
+    el.classList.toggle("is-hidden-model", mode === "detail" && k !== detailTarget);
     if (mode === "detail") {
-      if (i === detailTarget) {
+      if (k === detailTarget) {
         // Chosen model: full size, sharp, glides to the centre at 1.6x.
         el.style.setProperty("--s", "1.6");
         el.style.setProperty("--hs", "1");
@@ -993,29 +1272,36 @@ function applyModelStates() {
       el.style.setProperty("--z", String(depth.z));
     }
   });
-  document.querySelectorAll(".stl-segment").forEach((seg, i) => {
-    seg.classList.toggle("is-active", i === active);
-    seg.setAttribute("aria-selected", i === active ? "true" : "false");
-  });
+  updateSegments();
 }
 
+/* Manual change (segment dot, arrow, swipe, keyboard): glide the row
+   so that look reaches the centre; drift resumes ~6s later. */
 function setActive(i) {
-  active = (i + LOOKS.length) % LOOKS.length;
-  applyModelStates();
-  renderPanel();
+  noteManual();
+  if (mode === "detail") { switchDetail(i); return; }
+  if (gliding) return;
+  goToLook(i);
 }
 
-function enterDetail(i) {
+function enterDetail(k) {
   mode = "detail";
-  detailTarget = i;
-  active = i;
+  finishGlideNow();
+  stopMotionLoop();
+  // Snap the parallax back to zero first (instant, while the model
+  // transitions are off) so the detail glide is measured cleanly.
+  section.classList.add("stl-live");
+  resetParallaxNow();
+  section.classList.remove("stl-live");
+  detailTarget = k;
+  active = lookOf(k);
   section.classList.add("is-detail");
-  const look = LOOKS[i];
+  const look = LOOKS[active];
   document.getElementById("detailEyebrow").textContent = "Look " + look.num;
   document.getElementById("detailTitle").textContent = look.name;
   document.getElementById("detailSubtitle").textContent =
     "Three pieces — " + look.products.map((p) => p.colour).join(", ") + ".";
-  centreModel(i);
+  centreModel(k);
   applyModelStates();
   renderPanel();
   backBtn.focus({ preventScroll: true });
@@ -1023,38 +1309,51 @@ function enterDetail(i) {
 
 function switchDetail(i) {
   // Crossfade between models while staying in detail view.
-  detailTarget = (i + LOOKS.length) % LOOKS.length;
-  active = detailTarget;
-  const look = LOOKS[active];
-  document.getElementById("detailEyebrow").textContent = "Look " + look.num;
-  document.getElementById("detailTitle").textContent = look.name;
+  const look = ((i % LOOK_COUNT) + LOOK_COUNT) % LOOK_COUNT;
+  detailTarget = nearestSlotForLook(look, detailTarget);
+  active = look;
+  const l = LOOKS[active];
+  document.getElementById("detailEyebrow").textContent = "Look " + l.num;
+  document.getElementById("detailTitle").textContent = l.name;
   document.getElementById("detailSubtitle").textContent =
-    "Three pieces — " + look.products.map((p) => p.colour).join(", ") + ".";
+    "Three pieces — " + l.products.map((p) => p.colour).join(", ") + ".";
   // Measure the new model's glide after the old one starts leaving.
   requestAnimationFrame(() => {
-    centreModel(active);
+    centreModel(detailTarget);
     applyModelStates();
     renderPanel();
   });
 }
 
 function exitDetail() {
+  // Snap the row so the detail look is centred (invisible: the other
+  // models are still faded out), then fade the lineup back in.
+  let c = detailTarget;
+  while (c < CENTRE_MIN) c += LOOK_COUNT;
+  while (c > CENTRE_MAX) c -= LOOK_COUNT;
+  centreSlot = c;
+  driftTx = txForSlot(c);
+  writeTrack();
   mode = "lineup";
   detailTarget = null;
   section.classList.remove("is-detail");
+  active = lookOf(c);
   applyModelStates();
   renderPanel();
+  // Give the row a beat before the drift resumes.
+  lastManual = performance.now();
+  lastStep = performance.now();
 }
 
 /* ------------------------------------------------------------------ */
 /*  Controls                                                           */
 /* ------------------------------------------------------------------ */
 document.getElementById("prevBtn").addEventListener("click", () => {
-  if (mode === "detail") switchDetail(detailTarget - 1);
+  if (mode === "detail") switchDetail(active - 1);
   else setActive(active - 1);
 });
 document.getElementById("nextBtn").addEventListener("click", () => {
-  if (mode === "detail") switchDetail(detailTarget + 1);
+  if (mode === "detail") switchDetail(active + 1);
   else setActive(active + 1);
 });
 backBtn.addEventListener("click", exitDetail);
@@ -1082,8 +1381,8 @@ addAllBtn.addEventListener("click", () => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && mode === "detail") exitDetail();
   if (mode !== "detail") return;
-  if (e.key === "ArrowLeft") switchDetail(detailTarget - 1);
-  if (e.key === "ArrowRight") switchDetail(detailTarget + 1);
+  if (e.key === "ArrowLeft") switchDetail(active - 1);
+  if (e.key === "ArrowRight") switchDetail(active + 1);
 });
 stage.addEventListener("keydown", (e) => {
   if (mode !== "lineup") return;
@@ -1093,24 +1392,29 @@ stage.addEventListener("keydown", (e) => {
 
 // Swipe: horizontal swipe switches looks (detail) / active look (lineup).
 let touchX = null;
-stage.addEventListener("touchstart", (e) => { touchX = e.changedTouches[0].clientX; }, { passive: true });
+stage.addEventListener("touchstart", (e) => {
+  touching = true;
+  touchX = e.changedTouches[0].clientX;
+}, { passive: true });
 stage.addEventListener("touchend", (e) => {
+  touching = false;
   if (touchX === null) return;
   const dx = e.changedTouches[0].clientX - touchX;
   touchX = null;
   if (Math.abs(dx) < 40) return;
-  if (mode === "detail") switchDetail(detailTarget + (dx < 0 ? 1 : -1));
+  if (mode === "detail") switchDetail(active + (dx < 0 ? 1 : -1));
   else setActive(active + (dx < 0 ? 1 : -1));
 }, { passive: true });
 
 /* ------------------------------------------------------------------ */
-/*  Entrance (IntersectionObserver) + idle parallax                    */
+/*  Entrance (IntersectionObserver) + drift + mouse parallax          */
 /* ------------------------------------------------------------------ */
 const io = new IntersectionObserver(
   (entries) => {
     entries.forEach((entry) => {
       if (entry.isIntersecting) {
         section.classList.add("in-view");
+        inView = true;
         io.disconnect();
       }
     });
@@ -1119,30 +1423,54 @@ const io = new IntersectionObserver(
 );
 io.observe(section);
 
-// Gentle parallax on mouse move (transform-only, rAF-throttled, and
-// skipped entirely for touch users and reduced-motion users).
-if (!reducedMotion && window.matchMedia("(pointer: fine)").matches) {
-  let raf = null;
-  section.addEventListener("mousemove", (e) => {
-    if (raf) return;
-    raf = requestAnimationFrame(() => {
-      raf = null;
-      const r = stage.getBoundingClientRect();
-      const nx = (e.clientX - r.left) / r.width - 0.5; // -0.5 … 0.5
-      track.style.transform = "translate3d(" + (nx * -14).toFixed(1) + "px, 0, 0)";
-    });
-  });
-  section.addEventListener("mouseleave", () => {
-    track.style.transform = "";
-  });
-}
-
-// Re-measure the detail glide if the window resizes mid-detail.
-window.addEventListener("resize", () => {
-  if (mode === "detail" && detailTarget !== null) centreModel(detailTarget);
+// Mouse parallax (transform-only, rAF + lerp, depth-graded). The row
+// follows the pointer and each model shifts at its own rate, so the
+// layering is clearly visible. Touch devices skip it (no mouse);
+// reduced-motion users skip it entirely.
+stage.addEventListener("mousemove", (e) => {
+  if (reducedMotion || !finePointer || mode !== "lineup") return;
+  const r = stage.getBoundingClientRect();
+  pointerNX = (e.clientX - r.left) / r.width - 0.5; // -0.5 … 0.5
+  pointerNY = (e.clientY - r.top) / r.height - 0.5;
+  pointerOver = true;
+  ensureMotionLoop();
+});
+stage.addEventListener("mouseenter", () => {
+  hovering = true; // hover pauses the drift
+  pointerOver = true;
+});
+stage.addEventListener("mouseleave", () => {
+  hovering = false;
+  pointerOver = false;
+  pointerNX = 0;
+  pointerNY = 0;
+  ensureMotionLoop(); // settle the parallax back to zero
 });
 
-/* Initial render. */
+// Auto-drift: glide to the next look every 3.5s. Paused while the
+// user hovers/touches the stage, while in detail view, while the tab
+// is hidden, and for ~6s after any manual change.
+setInterval(() => {
+  if (reducedMotion || mode !== "lineup" || !inView || hovering || touching ||
+      document.hidden || gliding) return;
+  const now = performance.now();
+  if (now - lastManual < RESUME_MS || now - lastStep < DRIFT_MS) return;
+  step(1);
+}, 300);
+
+// Re-measure on resize (the slot geometry changes with the stage).
+window.addEventListener("resize", () => {
+  finishGlideNow();
+  if (mode === "detail" && detailTarget !== null) centreModel(detailTarget);
+  else {
+    driftTx = txForSlot(centreSlot);
+    writeTrack();
+  }
+});
+
+/* Initial render: look 01 centred, panel for it. */
+driftTx = txForSlot(centreSlot);
+writeTrack();
 applyModelStates();
 renderPanel();
 </script>
