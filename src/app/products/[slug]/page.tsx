@@ -67,8 +67,8 @@ export default async function ProductPage({
             </table>
           </Reveal>
 
-          {/* Centre — large product image(s) */}
-          <Reveal from="scale">
+          {/* Centre — large product image(s), wiped in like the original */}
+          <Reveal from="clip">
             <div
               className={`grid gap-3 ${
                 product.images.length > 1 ? "grid-cols-2" : "grid-cols-1"
@@ -107,8 +107,15 @@ export default async function ProductPage({
           </h2>
         </Reveal>
         <div className="mt-8 flex flex-wrap gap-5">
-          {others.map((p) => (
-            <ProductCard key={p.id} product={p} />
+          {others.map((p, i) => (
+            <Reveal
+              key={p.id}
+              from="clip"
+              delay={i * 100}
+              className="w-[300px] shrink-0 sm:w-[340px]"
+            >
+              <ProductCard product={p} className="w-full" />
+            </Reveal>
           ))}
         </div>
       </section>

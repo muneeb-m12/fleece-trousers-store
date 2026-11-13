@@ -29,6 +29,86 @@ body {
   color: #fff;
 }
 
+/* ------------------------------------------------------------------ */
+/* Scroll-reveal motion — deliberately HEAVY, like the original       */
+/* Silhouette Lite theme: long slides from the sides, images that     */
+/* wipe in behind a clip-path mask while scaling down, all on the     */
+/* same slow expo-style ease. Keyframe animations (not transitions)   */
+/* so the wipe + scale can run together, and so `animation-delay`    */
+/* holds the `from` state during staggered delays (fill-mode both).   */
+/* ------------------------------------------------------------------ */
+
+@keyframes rv-up {
+  from { opacity: 0; transform: translateY(96px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes rv-left {
+  from { opacity: 0; transform: translateX(-96px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes rv-right {
+  from { opacity: 0; transform: translateX(96px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes rv-scale {
+  from { opacity: 0; transform: scale(1.08); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* Image wipe: mask opens bottom-up while the image inside zooms out
+   from 1.2 — this is what makes mid-transition frames look split /
+   fragmented in the original. */
+@keyframes rv-clip {
+  from { clip-path: inset(100% 0 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes rv-clip-img {
+  from { transform: scale(1.2); }
+  to { transform: scale(1); }
+}
+/* Hero entrance (runs on mount): photo wipes in top-down while
+   zooming out from 1.25 — the first thing the visitor sees. */
+@keyframes hero-in {
+  from { clip-path: inset(0 0 100% 0); transform: scale(1.25); }
+  to { clip-path: inset(0 0 0 0); transform: scale(1); }
+}
+
+/* Hidden (pre-trigger) states — match the `from` keyframes exactly so
+   there is no jump when the animation starts. */
+.rv-hidden-up { opacity: 0; transform: translateY(96px); }
+.rv-hidden-left { opacity: 0; transform: translateX(-96px); }
+.rv-hidden-right { opacity: 0; transform: translateX(96px); }
+.rv-hidden-scale { opacity: 0; transform: scale(1.08); }
+.rv-hidden-clip { clip-path: inset(100% 0 0 0); }
+.rv-hidden-clip-img { transform: scale(1.2); }
+
+/* Visible (animating) states — 950–1100ms on the same slow ease. */
+.rv-anim-up { animation: rv-up 950ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rv-anim-left { animation: rv-left 950ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rv-anim-right { animation: rv-right 950ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rv-anim-scale { animation: rv-scale 950ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rv-anim-clip { animation: rv-clip 1000ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rv-anim-clip-img { animation: rv-clip-img 1100ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+.hero-entrance {
+  animation: hero-in 1.4s cubic-bezier(0.22, 1, 0.36, 1) 150ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  /* No motion at all: content renders in its natural state. */
+  .rv-anim-up,
+  .rv-anim-left,
+  .rv-anim-right,
+  .rv-anim-scale,
+  .rv-anim-clip,
+  .rv-anim-clip-img,
+  .hero-entrance {
+    animation: none !important;
+  }
+}
+
 /* Thin scrollbars stay out of the way on the drag strip */
 .no-scrollbar {
   scrollbar-width: none;

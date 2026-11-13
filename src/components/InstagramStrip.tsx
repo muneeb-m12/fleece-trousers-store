@@ -35,7 +35,7 @@ export default function InstagramStrip() {
       </Reveal>
       <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {TILES.map((tile, i) => (
-          <Reveal key={tile.src} delay={i * 60} from="scale">
+          <Reveal key={tile.src} delay={i * 90} from="clip">
             <a
               href="https://www.instagram.com/"
               target="_blank"

@@ -32,14 +32,16 @@ const LIFESTYLE_CARDS: { src: string; alt: string; label: string }[] = [
 export default function HomePage() {
   return (
     <main>
-      {/* Hero — one full-viewport photograph, no headline, no button */}
+      {/* Hero — one full-viewport photograph, no headline, no button.
+          The photo itself wipes in top-down while zooming out from 1.25
+          (hero-entrance, globals.css) — the first thing the visitor sees. */}
       <section className="relative h-[100svh] w-full overflow-hidden bg-[#eeeeee]">
         <Image
           src="/images/hero.jpg"
           alt="Two models wearing FLEECE. fleece trousers against a concrete wall"
           fill
           priority
-          className="object-cover object-center"
+          className="hero-entrance object-cover object-center"
           sizes="100vw"
         />
       </section>
@@ -70,7 +72,7 @@ export default function HomePage() {
           </Reveal>
           <div className="grid grid-cols-3 gap-3 sm:gap-4">
             {LIFESTYLE_CARDS.map((card, i) => (
-              <Reveal key={card.src} delay={i * 120} from="right">
+              <Reveal key={card.src} delay={i * 110} from="clip">
                 <Link
                   href="/collections/all"
                   className="group relative block overflow-hidden rounded-2xl bg-[#eeeeee]"
@@ -107,14 +109,21 @@ export default function HomePage() {
             </p>
           </div>
         </Reveal>
-        <Reveal delay={120} className="mt-10">
+        <div className="mt-10">
           <DragStrip>
-            {PRODUCTS.map((product) => (
-              <ProductCard key={product.id} product={product} />
+            {PRODUCTS.map((product, i) => (
+              <Reveal
+                key={product.id}
+                from="clip"
+                delay={i * 100}
+                className="w-[300px] shrink-0 snap-start sm:w-[340px]"
+              >
+                <ProductCard product={product} className="w-full" />
+              </Reveal>
             ))}
           </DragStrip>
           <p className="mt-2 text-sm text-black/40">← Drag to explore →</p>
-        </Reveal>
+        </div>
       </section>
 
       <InstagramStrip />

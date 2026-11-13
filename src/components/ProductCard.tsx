@@ -10,7 +10,16 @@ import { useState } from "react";
 import { useCart } from "@/lib/cart";
 import { formatPKR, SIZES, type Product, type Size } from "@/lib/products";
 
-export default function ProductCard({ product }: { product: Product }) {
+export default function ProductCard({
+  product,
+  className = "w-[300px] shrink-0 snap-start sm:w-[340px]",
+}: {
+  product: Product;
+  /** Sizing of the card itself. Callers that wrap the card in a Reveal
+      pass "w-full" here and put the sizing on the wrapper instead, so
+      the wrapper — not the card — is the flex/grid item. */
+  className?: string;
+}) {
   const { add } = useCart();
   const [size, setSize] = useState<Size | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -27,7 +36,7 @@ export default function ProductCard({ product }: { product: Product }) {
 
   return (
     <article
-      className="group relative w-[300px] shrink-0 snap-start sm:w-[340px]"
+      className={`group relative ${className}`}
       onMouseLeave={() => setPickerOpen(false)}
     >
       <div className="relative overflow-hidden rounded-2xl bg-[#eeeeee]">

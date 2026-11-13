@@ -109,10 +109,13 @@ export default function CatalogPage() {
         ) : (
           <div className="mt-10 grid grid-cols-1 gap-x-5 gap-y-12 sm:grid-cols-2 lg:grid-cols-3">
             {visible.map((product, i) => (
-              <Reveal key={product.id} delay={(i % 3) * 80} className="w-full">
-                <div className="[&>article]:w-full [&>article]:snap-none">
-                  <ProductCard product={product} />
-                </div>
+              <Reveal
+                key={product.id}
+                from="clip"
+                delay={(i % 3) * 100}
+                className="w-full"
+              >
+                <ProductCard product={product} className="w-full" />
               </Reveal>
             ))}
           </div>
