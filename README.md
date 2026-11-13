@@ -60,6 +60,39 @@ All prices live in one file: `src/lib/products.ts`. Change them there.
 - Only **Black + Charcoal** are confirmed launch colours — the other four
   colours are placeholders until a supplier confirms what can be stitched.
 
+## Shop the Look (Nike-style editorial section)
+
+A "Shop the Look" section sits on the homepage between the PRODUCTS strip
+and the Instagram strip (`src/components/ShopTheLook.tsx`, data in
+`src/lib/shop-looks.ts`):
+
+- Six looks in a row on a white studio background; outer models smaller,
+  blurred and faded (depth of field), pulsing pin on each outfit, idle
+  float + mouse parallax, prev/next arrows and a segmented progress bar
+  with look names (01 Street Layers … 06 Off Duty).
+- Click/tap a model: the others fade and blur away while the chosen one
+  scales ~1.6x and glides to the centre (spring ease
+  `cubic-bezier(0.22, 1, 0.36, 1)`); the heading crossfades into the
+  look title; three product pins scale in on the outfit; the "In this
+  look" panel slides in from the right with staggered thumbnails and a
+  black "Add all to bag" button (adds all three pieces, size L, to the
+  shared cart). Back arrow / background click / Esc reverses; arrow keys
+  and swipe switch looks in detail view with a crossfade.
+- Entrance via IntersectionObserver (models rise from the floor, staggered);
+  hover lifts a model 8px and dims the others to 70%; `prefers-reduced-motion`
+  is respected; keyboard-accessible (focus rings, Esc to go back).
+- Model photos: `public/models/model-*.jpg` — six full-body male models
+  on pure white backgrounds (AI-generated). They are JPGs, **not** true
+  transparent PNGs, so they render with `mix-blend-mode: multiply` and
+  the white disappears on the light background. To swap in real
+  transparent PNGs, replace the entries in `src/lib/shop-looks.ts` —
+  the blend mode is harmless for PNGs with real transparency.
+- The same section also exists as a **standalone single file**,
+  `public/shop-the-look.html` (served at `/shop-the-look.html`), with
+  its own minimal top nav and an "Add all to bag" that just shows an
+  added state (no backend). Its image paths are relative
+  (`models/…`, `products/…`), so it works both served and opened directly.
+
 ## Photos
 
 All photos are **AI-generated** (no real product photos exist yet — no

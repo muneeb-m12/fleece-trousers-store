@@ -8,6 +8,7 @@ import DragStrip from "@/components/DragStrip";
 import InstagramStrip from "@/components/InstagramStrip";
 import ProductCard from "@/components/ProductCard";
 import Reveal from "@/components/Reveal";
+import ShopTheLook from "@/components/ShopTheLook";
 import { PRODUCTS } from "@/lib/products";
 import { TRUST_LINE } from "@/lib/store";
 
@@ -125,6 +126,10 @@ export default function HomePage() {
           <p className="mt-2 text-sm text-black/40">← Drag to explore →</p>
         </div>
       </section>
+
+      {/* SHOP THE LOOK — Nike-style editorial section (see
+          src/components/ShopTheLook.tsx). */}
+      <ShopTheLook />
 
       <InstagramStrip />
     </main>
